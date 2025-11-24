@@ -1,8 +1,6 @@
 services:
   app:
-    build: 
-      context: .
-      dockerfile: Dockerfile
+    image: smili1605/projeto-devops:${IMAGEM_TAG}
     ports:
       - "8000:8000"
     environment:
