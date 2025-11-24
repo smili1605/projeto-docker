@@ -140,10 +140,6 @@ Variáveis de Ambiente
 Edite o arquivo .env para configurar:
 
 env
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=sua_senha_segura
-POSTGRES_DB=app_db
-
 DB_USER=app_user
 DB_PASSWORD=app_password
 DB_HOST=db
@@ -214,3 +210,4 @@ volumes:
 networks:
   app-network:
     driver: bridge
+```
