@@ -66,15 +66,15 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             # Extract the commit tag for Docker Image
-            TAG=${{needs.build.outputs.docker_tag}}
+            TAG=${{ needs.checkout.outputs.commit_hash }}
             # Create .env file
-            [-e .env] && rm .env
+            [[ -e .env ]] && rm .env
             touch .env
             echo "DOCKER_IMAGE_TAG=$TAG" >> .env
-            echo "DB_USER=${{secrets.DB_USER}}" >> .env
-            echo "DB_PASSWORD=${{secrets.DB_PASSWORD}}" >> .env
-            echo "DB_NAME=${{secrets.DB_NAME}}" >> .env
-            echo "DB_PORT=${{secrets.DB_PORT}}" >> .env
+            echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+            echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+            echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+            echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env
             # Run MultiContainer
             docker compose up -d --build
             # Remover Old Containers
