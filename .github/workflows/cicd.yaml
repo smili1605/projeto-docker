@@ -24,9 +24,6 @@ jobs:
     name: Build and Push Docker Image 
     runs-on: ubuntu-latest
     needs: checkout
-    env:
-      commit_hash: ${{ needs.checkout.outputs.commit_hash }}
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -39,21 +36,17 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
-          echo "Building image with tag: ${{ env.commit_hash }}"
-          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/projeto-devops:${{ env.commit_hash }} .
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/projeto-devops:${{ env.commit_hash }}
+          echo "TAG gerada: ${{ needs.checkout.outputs.commit_hash }}"
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/projeto-devops:${{ needs.checkout.outputs.commit_hash }} .
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/projeto-devops:${{ needs.checkout.outputs.commit_hash }}
 
 
   deploy:
     name: Deploy on Digital Ocean
     runs-on: ubuntu-latest
-
     needs:
       - checkout
       - docker
-
-    env:
-      TAG: ${{ needs.checkout.outputs.commit_hash }}
 
     steps:
       - name: Checkout the source code
@@ -69,6 +62,7 @@ jobs:
           source: "./docker-compose.prod.yml"
           target: "~/"
 
+
       - name: Deploy on Digital Ocean
         uses: appleboy/ssh-action@v0.1.3
         with:
@@ -76,19 +70,18 @@ jobs:
           username: ${{ secrets.USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "Deploying version TAG=${TAG}"
+            TAG=${{ needs.checkout.outputs.commit_hash }}
+            echo "TAG recebida no servidor: $TAG"
 
-            # Recria o .env sempre limpo
             rm -f .env
-            echo "DOCKER_IMAGE_TAG=${TAG}" >> .env
+            echo "DOCKER_IMAGE_TAG=$TAG" >> .env
             echo "DB_USER=${{ secrets.DB_USER }}" >> .env
             echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
             echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
             echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env
 
-            # Sobe containers
+            docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --build
 
-            # Limpa containers e imagens antigas
             docker container prune -f
             docker image prune -a -f
