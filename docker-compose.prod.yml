@@ -1,6 +1,6 @@
 services:
   app:
-    image: smili1605/projeto-devops:${DOCKER_IMAGEM_TAG}
+    image: smili1605/projeto-devops:${DOCKER_IMAGE_TAG}
     ports:
       - "8000:8000"
     env_file:
