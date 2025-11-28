@@ -44,6 +44,8 @@ jobs:
     name: "Deploy on Digital Ocean"
     runs-on: ubuntu-latest
     needs: docker
+    env:
+      tag: ${{ needs.checkout.outputs.commit_hash }}
     steps:
       - name: Checkout the source code
         uses: actions/checkout@v4
@@ -60,13 +62,15 @@ jobs:
 
       - name: Deploy on Digital Ocean
         uses: appleboy/ssh-action@v0.1.3
+        env: 
+          tag: ${{ needs.checkout.outputs.commit_hash }}
         with:
           host: ${{secrets.HOST}}
           username: ${{secrets.USER}}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             # Extract the commit tag for Docker Image
-            TAG=${{ needs.checkout.outputs.commit_hash }}
+            TAG=${{ env.tag }}
             # Create .env file
             [[ -e .env ]] && rm .env
             touch .env
