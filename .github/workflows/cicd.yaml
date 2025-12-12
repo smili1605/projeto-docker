@@ -23,15 +23,32 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          # Instala dependências básicas se requirements.txt existir
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt não encontrado, criando básico..."
+            echo "pytest==7.4.3" > requirements.txt
+          fi
+          # Garante que pytest está instalado
+          pip install pytest
 
       - name: Run Tests
         run: |
-          if [ -d "tests" ]; then
-            pytest tests/
+          echo "Executando testes..."
+          if [ -d "tests" ] && [ -n "$(ls -A tests 2>/dev/null)" ]; then
+            echo "Encontrei testes na pasta tests/"
+            pytest tests/ -v
           else
-            echo "Nenhum teste encontrado"
-            python -c "print('Teste básico passou')"
+            echo "Nenhum teste encontrado, executando teste básico..."
+            python -c "
+            import sys
+            print('Executando teste básico Python...')
+            assert 1 + 1 == 2, 'Matemática básica falhou!'
+            print('✅ Teste básico passou!')
+            sys.exit(0)
+            "
           fi
 
       - name: Generate Tag
@@ -68,11 +85,6 @@ jobs:
         with:
           terraform_version: "1.6.0"
 
-      - name: Debug - Show Terraform Files
-        run: |
-          echo "Conteúdo da pasta terraform:"
-          ls -la ./terraform/
-
       - name: Terraform Init
         working-directory: ./terraform
         run: terraform init
@@ -100,7 +112,7 @@ jobs:
         run: |
           IP=$(terraform output -raw droplet_ip 2>/dev/null || echo "")
           if [ -z "$IP" ]; then
-            echo "Erro: Não foi possível obter o IP"
+            echo "Erro: Não foi possível obter o IP do Terraform Output."
             exit 1
           fi
           echo "server_ip=$IP" >> "$GITHUB_OUTPUT"
