@@ -10,5 +10,5 @@ output "droplet_id" {
 
 output "floating_ip" {
   description = "Floating IP (se alocado)"
-  value       = try(digitalocean_floating_ip.fip.ip, "")
+  value       = try(digitalocean_floating_ip.fip.ip_address, "")
 }
