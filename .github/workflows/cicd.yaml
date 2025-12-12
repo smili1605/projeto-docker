@@ -25,22 +25,31 @@ jobs:
         working-directory: terraform
         run: terraform init
 
-      - name: Terraform Plan (Remote Apply)
+      - name: Terraform Plan (remote)
         working-directory: terraform
         env:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
         run: terraform plan
 
-      # 🔥 IMPORTANTE
-      # Como o workspace é VCS-driven, o APPLY acontece no Terraform Cloud
-      # Então aqui apenas sincronizamos o estado e pegamos os outputs
-      - name: Wait and fetch outputs (after remote apply)
+      - name: Wait for Terraform Cloud apply + fetch outputs
         id: get_ip
         working-directory: terraform
         run: |
-          terraform apply -refresh-only -auto-approve
-          IP=$(terraform output -raw droplet_ip)
-          echo "server_ip=$IP" >> $GITHUB_OUTPUT
+          # Esperar o apply do Terraform Cloud terminar
+          # Aqui apenas aguardamos o state ser atualizado
+          for i in {1..30}; do
+            IP=$(terraform output -raw droplet_ip 2>/dev/null || true)
+            if [ ! -z "$IP" ]; then
+              echo "IP encontrado: $IP"
+              echo "server_ip=$IP" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Aguardando o Terraform Cloud aplicar... ($i/30)"
+            sleep 10
+          done
+          
+          echo "Falha ao obter o IP do droplet."
+          exit 1
 
   deploy:
     name: Deploy app to Droplet
@@ -62,12 +71,10 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H $IP >> ~/.ssh/known_hosts
 
-      - name: Copy files and run remote deploy
+      - name: Copy files and deploy
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
 
-          # Envia o docker-compose
           scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$IP:/home/ubuntu/docker-compose.yml
 
-          # Sobe a aplicação
           ssh ubuntu@$IP "cd /home/ubuntu && docker compose up -d --build"
