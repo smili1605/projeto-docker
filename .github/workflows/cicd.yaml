@@ -6,7 +6,7 @@ on:
 
 jobs:
   provision-infra:
-    name: Provision Infra (Terraform Cloud)
+    name: Provision Infra (Terraform)
     runs-on: ubuntu-latest
     outputs:
       server_ip: ${{ steps.get_ip.outputs.server_ip }}
@@ -21,23 +21,24 @@ jobs:
           terraform_version: 1.6.0
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-      # Apenas init + plan (apply será feito automaticamente pelo Terraform Cloud)
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
 
-      - name: Terraform Plan (Terraform Cloud Apply)
+      - name: Terraform Plan (Remote Apply)
         working-directory: terraform
         env:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
         run: terraform plan
 
-      # Após o apply automático, buscamos os outputs
-      - name: Get droplet IP
+      # 🔥 IMPORTANTE
+      # Como o workspace é VCS-driven, o APPLY acontece no Terraform Cloud
+      # Então aqui apenas sincronizamos o estado e pegamos os outputs
+      - name: Wait and fetch outputs (after remote apply)
         id: get_ip
         working-directory: terraform
         run: |
-          sleep 20  # short delay to allow remote apply to finish
+          terraform apply -refresh-only -auto-approve
           IP=$(terraform output -raw droplet_ip)
           echo "server_ip=$IP" >> $GITHUB_OUTPUT
 
@@ -65,5 +66,8 @@ jobs:
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
 
+          # Envia o docker-compose
           scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$IP:/home/ubuntu/docker-compose.yml
+
+          # Sobe a aplicação
           ssh ubuntu@$IP "cd /home/ubuntu && docker compose up -d --build"
