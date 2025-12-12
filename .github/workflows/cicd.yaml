@@ -1,66 +1,103 @@
-name: CI/CD - Terraform Cloud + DigitalOcean + Docker
+name: CI/CD - Terraform Cloud + DigitalOcean + Docker (Python)
 
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  provision-infra:
-    name: Provision Infra
+  build:
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    
-    # Define as saídas para serem usadas no próximo job
     outputs:
-      server_ip: ${{ steps.get_ip.outputs.server_ip }}
+      docker_tag: ${{ steps.generate_tag.outputs.sha }}
 
     steps:
-      - name: Checkout
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Tests
+        run: |
+          # Ajuste para seus testes Python
+          pytest tests/
+
+      - name: Generate Tag
+        id: generate_tag
+        run: |
+          SHA=$(echo $GITHUB_SHA | head -c7)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Login in DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker Image
+        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/python-app:${{ steps.generate_tag.outputs.sha }} .
+
+      - name: Push to Docker Hub
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/python-app:${{ steps.generate_tag.outputs.sha }}
+
+  provision-infra:
+    name: Provision Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      droplet_ip: ${{ steps.get_ip.outputs.server_ip }}
+
+    steps:
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+        uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.6.0
-          # Necessário para acessar o Terraform Cloud
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_version: "1.6.0"
 
       - name: Terraform Init
-        working-directory: terraform
+        working-directory: ./terraform
         run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
+          TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
 
-      - name: Terraform Validate
-        working-directory: terraform
-        run: terraform validate
-
-      # O Apply já faz o plan implicitamente. O -auto-approve evita que ele peça "yes".
       - name: Terraform Apply
-        working-directory: terraform
+        working-directory: ./terraform
         run: terraform apply -auto-approve
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
+          TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
 
-      # ⭐ SOLUÇÃO CORRIGIDA: Usar terraform output nativo
       - name: Get Droplet IP
         id: get_ip
-        working-directory: terraform
+        working-directory: ./terraform
         run: |
-          # Pega o IP definido no seu outputs.tf
-          # Substitua 'droplet_ip' pelo nome que você usou no seu arquivo outputs.tf
           IP=$(terraform output -raw droplet_ip)
-          
           if [ -z "$IP" ]; then
             echo "Erro: Não foi possível obter o IP do Terraform Output."
             exit 1
           fi
-
           echo "server_ip=$IP" >> "$GITHUB_OUTPUT"
-          echo "IP capturado: $IP"
+          echo "Droplet IP: $IP"
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
 
   deploy:
-    name: Deploy App
+    name: Deploy on Digital Ocean
     runs-on: ubuntu-latest
-    needs: provision-infra # Espera o job anterior terminar
+    needs: [build, provision-infra]
 
     steps:
-      - name: Checkout
+      - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Start SSH Agent
@@ -70,24 +107,37 @@ jobs:
 
       - name: Add Droplet to known_hosts
         run: |
-          IP=${{ needs.provision-infra.outputs.server_ip }}
+          IP=${{ needs.provision-infra.outputs.droplet_ip }}
           mkdir -p ~/.ssh
           ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts
 
       - name: Upload Docker Files
         run: |
-          IP=${{ needs.provision-infra.outputs.server_ip }}
+          IP=${{ needs.provision-infra.outputs.droplet_ip }}
           scp -o StrictHostKeyChecking=no \
             docker-compose.yml \
-            docker-compose.prod.yml \
             Dockerfile \
             requirements.txt \
             ubuntu@$IP:/home/ubuntu/
 
       - name: Deploy App
         run: |
-          IP=${{ needs.provision-infra.outputs.server_ip }}
+          IP=${{ needs.provision-infra.outputs.droplet_ip }}
+          TAG=${{ needs.build.outputs.docker_tag }}
           ssh ubuntu@$IP "
             cd /home/ubuntu &&
-            docker compose -f docker-compose.prod.yml up -d --build
+            # Cria arquivo .env
+            [ -e .env ] && rm .env
+            touch .env
+            echo 'DOCKER_IMAGE_TAG=$TAG' >> .env
+            echo 'DB_USER=${{ secrets.DB_USER }}' >> .env
+            echo 'DB_PASS=${{ secrets.DB_PASS }}' >> .env
+            echo 'DB_NAME=${{ secrets.DB_NAME }}' >> .env
+            # Login no DockerHub
+            docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
+            # Subir container
+            docker compose up -d --build
+            # Limpeza de containers e imagens antigas
+            docker container prune -f
+            docker image prune -f -a
           "
