@@ -8,6 +8,7 @@ jobs:
   provision-infra:
     name: Provision Infra
     runs-on: ubuntu-latest
+
     outputs:
       server_ip: ${{ steps.get_ip.outputs.server_ip }}
 
@@ -33,22 +34,22 @@ jobs:
         working-directory: terraform
         run: terraform plan
 
-      # ❌ REMOVIDO apply, pois o Terraform Cloud fará isso sozinho
+      # Terraform Cloud aplica automaticamente — NÃO rodar apply localmente
 
-      - name: Wait for Apply (60s)
-        run: sleep 60
+      - name: Wait Terraform Cloud Apply (90s)
+        run: sleep 90
 
       - name: Get Droplet IP
         id: get_ip
         working-directory: terraform
         run: |
-          IP=$(terraform output -raw droplet_ip || echo "")
+          RAW=$(terraform output droplet_ip | tr -d '\n')
+          IP=$(echo "$RAW" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
           echo "server_ip=$IP" >> $GITHUB_OUTPUT
           echo "IP capturado: $IP"
 
-
   deploy:
-    name: Deploy
+    name: Deploy App
     runs-on: ubuntu-latest
     needs: provision-infra
 
@@ -67,7 +68,7 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts
 
-      - name: Upload Files
+      - name: Upload Docker Files
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
           scp -o StrictHostKeyChecking=no \
