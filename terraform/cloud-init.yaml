@@ -1,0 +1,18 @@
+#cloud-config
+package_update: true
+packages:
+- apt-transport-https
+- ca-certificates
+- curl
+- gnupg-agent
+- software-properties-common
+runcmd:
+- [ bash, -lc, "curl -fsSL https://get.docker.com | sh" ]
+- [ bash, -lc, "usermod -aG docker $USER || true" ]
+- [ bash, -lc, "curl -L \"https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)\" -o /usr/local/bin/docker-compose" ]
+- [ bash, -lc, "chmod +x /usr/local/bin/docker-compose" ]
+- [ bash, -lc, "mkdir -p /home/ubuntu/app || true" ]
+- [ bash, -lc, "chown -R ubuntu:ubuntu /home/ubuntu/app || true" ]
+
+
+# Boots will run as root; adjust if a particular user is expected.

@@ -11,3 +11,15 @@ venv/
 .env
 
 .pytest_cache
+
+
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+terraform.tfvars
+terraform.tfvars.json
+override.tf
+override.tf.json
+crash.log
+.terraform.lock.hcl
