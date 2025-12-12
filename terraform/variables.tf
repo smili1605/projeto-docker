@@ -13,12 +13,12 @@ variable "ssh_key_name" {
 
 variable "region" {
   type    = string
-  default = "sfo2"
+  default = "nyc3"
 }
 
 variable "size" {
   type    = string
-  default = "s-1vcpu-2gb" # 1vCPU / 2GB RAM
+  default = "s-1vcpu-2gb"
 }
 
 variable "image" {

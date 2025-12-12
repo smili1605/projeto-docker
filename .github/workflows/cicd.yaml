@@ -29,13 +29,13 @@ jobs:
         working-directory: terraform
         env:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        run: terraform plan -out=tfplan
+        run: terraform plan
 
       - name: Terraform Apply
         working-directory: terraform
         env:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve
 
       - name: Get droplet IP
         id: get_ip
@@ -68,8 +68,8 @@ jobs:
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
 
-          # Envia o docker-compose para o servidor
+          # Envia o docker-compose
           scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$IP:/home/ubuntu/docker-compose.yml
 
-          # Sobe o container
+          # Sobe app
           ssh ubuntu@$IP "cd /home/ubuntu && docker compose up -d --build"
