@@ -1,15 +1,15 @@
-name: CI/CD with Terraform (DigitalOcean + Terraform Cloud)
+name: CI/CD - DigitalOcean + Terraform + Docker
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
 
 jobs:
   provision-infra:
-    name: Provision Infra (Terraform Cloud)
+    name: Provision Infra (Terraform)
     runs-on: ubuntu-latest
     outputs:
-      server_ip: ${{ steps.fetch.outputs.server_ip }}
+      server_ip: ${{ steps.get_ip.outputs.server_ip }}
 
     steps:
       - name: Checkout
@@ -18,63 +18,33 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: "1.6.0"
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_version: 1.6.0
+
+      - name: Set env (DO TOKEN)
+        run: echo "DIGITALOCEAN_TOKEN=${{ secrets.DO_TOKEN }}" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
 
-      - name: Terraform Plan (Terraform Cloud)
+      - name: Terraform Plan
         working-directory: terraform
-        env:
-          DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        run: terraform plan
+        run: terraform plan -out=tfplan
 
-      - name: Fetch outputs from Terraform Cloud API
-        id: fetch
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Droplet IP
+        id: get_ip
+        working-directory: terraform
         run: |
-          echo "Buscando outputs no Terraform Cloud..."
-
-          WORKSPACE_ID=$(curl -s \
-            --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
-            https://app.terraform.io/api/v2/organizations/ProjetoDocker/workspaces/projeto-docker \
-            | jq -r '.data.id')
-
-          echo "Workspace ID: $WORKSPACE_ID"
-
-          RUN_ID=""
-          for i in {1..20}; do
-            RUN_ID=$(curl -s \
-              --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
-              "https://app.terraform.io/api/v2/workspaces/$WORKSPACE_ID/runs?status=applied" \
-              | jq -r '.data[0].id')
-
-            if [ "$RUN_ID" != "null" ] && [ ! -z "$RUN_ID" ]; then
-              break
-            fi
-
-            echo "Nenhum apply encontrado ainda... ($i/20)"
-            sleep 5
-          done
-
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "❌ Nenhum apply encontrado. Abortando."
-            exit 1
-          fi
-
-          echo "Último apply RUN ID: $RUN_ID"
-
-          SERVER_IP=$(curl -s \
-            --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
-            "https://app.terraform.io/api/v2/workspaces/$WORKSPACE_ID/state-version" \
-            | jq -r '.data.attributes.outputs.droplet_ip.value')
-
-          echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
-          echo "✔ IP encontrado: $SERVER_IP"
+          IP=$(terraform output -raw droplet_ip)
+          echo "server_ip=$IP" >> $GITHUB_OUTPUT
+          echo "IP capturado: $IP"
 
   deploy:
-    name: Deploy app to Droplet
+    name: Deploy App
     runs-on: ubuntu-latest
     needs: provision-infra
 
@@ -82,25 +52,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent
-        uses: webfactory/ssh-agent@v0.9.0
+      - name: Start SSH Agent
+        uses: webfactory/ssh-agent@v0.8.1
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add host to known_hosts
+      - name: Add Droplet to known_hosts
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
           mkdir -p ~/.ssh
-          ssh-keyscan -H $IP >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts
 
-      - name: Copy files and deploy
+      - name: Copy files to server
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
+          scp -o StrictHostKeyChecking=no \
+            docker-compose.yml \
+            docker-compose.prod.yml \
+            Dockerfile \
+            requirements.txt \
+            ubuntu@$IP:/home/ubuntu/
 
-          echo "Enviando docker-compose..."
-          scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$IP:/home/ubuntu/docker-compose.yml
-
-          echo "Subindo containers..."
-          ssh ubuntu@$IP "cd /home/ubuntu && docker compose up -d --build"
-
-          echo "✔ Deploy finalizado!"
+      - name: Remote Deploy
+        run: |
+          IP=${{ needs.provision-infra.outputs.server_ip }}
+          ssh ubuntu@$IP "
+            cd /home/ubuntu &&
+            docker compose -f docker-compose.prod.yml up -d --build
+          "
