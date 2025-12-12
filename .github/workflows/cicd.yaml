@@ -1,12 +1,12 @@
-name: CI/CD - DigitalOcean + Terraform + Docker
+name: CI/CD - Terraform Cloud + DigitalOcean + Docker
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   provision-infra:
-    name: Provision Infra (Terraform)
+    name: Provision Infra
     runs-on: ubuntu-latest
     outputs:
       server_ip: ${{ steps.get_ip.outputs.server_ip }}
@@ -20,8 +20,10 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      - name: Set env (DO TOKEN)
-        run: echo "DIGITALOCEAN_TOKEN=${{ secrets.DO_TOKEN }}" >> $GITHUB_ENV
+      - name: Configure Terraform Cloud Token
+        run: |
+          mkdir -p ~/.terraform.d
+          echo 'credentials "app.terraform.io" { token = "${{ secrets.TF_API_TOKEN }}" }' > ~/.terraform.d/credentials.tfrc.json
 
       - name: Terraform Init
         working-directory: terraform
@@ -44,7 +46,7 @@ jobs:
           echo "IP capturado: $IP"
 
   deploy:
-    name: Deploy App
+    name: Deploy
     runs-on: ubuntu-latest
     needs: provision-infra
 
@@ -63,7 +65,7 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts
 
-      - name: Copy files to server
+      - name: Upload Files
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
           scp -o StrictHostKeyChecking=no \
@@ -73,7 +75,7 @@ jobs:
             requirements.txt \
             ubuntu@$IP:/home/ubuntu/
 
-      - name: Remote Deploy
+      - name: Deploy App
         run: |
           IP=${{ needs.provision-infra.outputs.server_ip }}
           ssh ubuntu@$IP "
