@@ -1,123 +1,111 @@
-name: CI/CD Full Pipeline
+name: CI/CD with Terraform (DigitalOcean + Terraform Cloud)
 
 on:
   push:
-    branches: ["main"]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
-  build:
-    name: Build & Test
+  provision-infra:
+    name: Provision Infra (Terraform Cloud)
     runs-on: ubuntu-latest
+    outputs:
+      server_ip: ${{ steps.fetch.outputs.server_ip }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
         with:
-          node-version: 18
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run tests
-        run: npm test
-
-  terraform:
-    name: IaC - Terraform Cloud
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure Terraform Cloud Credentials
-        run: |
-          mkdir -p ~/.terraform.d
-          cat <<EOF > ~/.terraform.d/credentials.tfrc.json
-          {
-            "credentials": {
-              "app.terraform.io": {
-                "token": "${{ secrets.TF_API_TOKEN }}"
-              }
-            }
-          }
-          EOF
-
-      - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@v3
-        with:
+          terraform_version: 1.6.0
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: Terraform Init
+        working-directory: terraform
         run: terraform init
 
-      - name: Terraform Plan
-        run: terraform plan -input=false
+      - name: Terraform Plan (Terraform Cloud)
+        working-directory: terraform
+        env:
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
+        run: terraform plan
 
-      - name: Terraform Apply (via Terraform Cloud)
-        run: terraform apply -auto-approve
-
-      - name: Aguardar Terraform Cloud terminar o apply e liberar o IP
-        id: fetch-ip
-        shell: bash
+      - name: Fetch outputs from Terraform Cloud API
+        id: fetch
         run: |
-          echo "Aguardando Terraform Cloud terminar o apply..."
+          echo "Buscando outputs no Terraform Cloud..."
 
-          TERRAFORM_BIN="${TERRAFORM_CLI_PATH}/terraform-bin"
+          WORKSPACE_ID=$(curl -s \
+            --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
+            https://app.terraform.io/api/v2/organizations/ProjetoDocker/workspaces/projeto-docker \
+            | jq -r '.data.id')
 
-          for i in {1..40}; do
-            IP=$($TERRAFORM_BIN output -raw droplet_ip 2>/dev/null || true)
+          echo "Workspace ID: $WORKSPACE_ID"
 
-            if [[ ! -z "$IP" && "$IP" != *"╷"* ]]; then
-              echo "server_ip=$IP" >> "$GITHUB_OUTPUT"
-              echo "IP encontrado: $IP"
-              exit 0
+          RUN_ID=""
+          for i in {1..20}; do
+            RUN_ID=$(curl -s \
+              --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
+              "https://app.terraform.io/api/v2/workspaces/$WORKSPACE_ID/runs?status=applied" \
+              | jq -r '.data[0].id')
+
+            if [ "$RUN_ID" != "null" ] && [ ! -z "$RUN_ID" ]; then
+              break
             fi
 
-            echo "Ainda não disponível... ($i/40)"
-            sleep 10
+            echo "Nenhum apply encontrado ainda... ($i/20)"
+            sleep 5
           done
 
-          echo "❌ Falha: Terraform Cloud não liberou o IP a tempo."
-          exit 1
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "❌ Nenhum apply encontrado. Abortando."
+            exit 1
+          fi
 
+          echo "Último apply RUN ID: $RUN_ID"
+
+          OUTPUTS=$(curl -s \
+            --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
+            "https://app.terraform.io/api/v2/runs/$RUN_ID" \
+            | jq -r '.data.relationships.workspace.outputs')
+
+          SERVER_IP=$(curl -s \
+            --header "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
+            "https://app.terraform.io/api/v2/workspaces/$WORKSPACE_ID/state-version" \
+            | jq -r '.data.attributes.outputs.droplet_ip.value')
+
+          echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
+          echo "✔ IP encontrado: $SERVER_IP"
 
   deploy:
-    name: Deploy da Aplicação
+    name: Deploy app to Droplet
     runs-on: ubuntu-latest
-    needs: terraform
+    needs: provision-infra
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Instalar SSH Client
-        run: sudo apt-get update && sudo apt-get install -y openssh-client
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.8.1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Adicionar chave SSH
+      - name: Add host to known_hosts
         run: |
+          IP=${{ needs.provision-infra.outputs.server_ip }}
           mkdir -p ~/.ssh
-          echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $IP >> ~/.ssh/known_hosts
 
-      - name: Copiar arquivos para o servidor
+      - name: Copy files and deploy
         run: |
-          rsync -avz -e "ssh -o StrictHostKeyChecking=no" ./ \
-            root@${{ needs.terraform.outputs.server_ip }}:/root/app/
+          IP=${{ needs.provision-infra.outputs.server_ip }}
 
-      - name: Deploy com Docker
-        run: |
-          ssh -o StrictHostKeyChecking=no root@${{ needs.terraform.outputs.server_ip }} << 'EOF'
-            cd /root/app
-            docker stop app || true
-            docker rm app || true
-            docker build -t app .
-            docker run -d --name app -p 80:3000 app
-          EOF
+          echo "Enviando docker-compose..."
+          scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$IP:/home/ubuntu/docker-compose.yml
 
-      - name: URL Final
-        run: echo "🌎 Aplicação disponível em: http://${{ needs.terraform.outputs.server_ip }}"
+          echo "Subindo containers..."
+          ssh ubuntu@$IP "cd /home/ubuntu && docker compose up -d --build"
+
+          echo "✔ Deploy finalizado!"
