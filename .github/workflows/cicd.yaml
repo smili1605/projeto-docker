@@ -19,31 +19,33 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
-
-      - name: Configure Terraform Cloud Token
-        run: |
-          mkdir -p ~/.terraform.d
-          echo 'credentials "app.terraform.io" { token = "${{ secrets.TF_API_TOKEN }}" }' > ~/.terraform.d/credentials.tfrc.json
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
 
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
       - name: Terraform Plan
         working-directory: terraform
-        run: terraform plan -out=tfplan
+        run: terraform plan
 
-      - name: Terraform Apply
-        working-directory: terraform
-        run: terraform apply -auto-approve tfplan
+      # ❌ REMOVIDO apply, pois o Terraform Cloud fará isso sozinho
+
+      - name: Wait for Apply (60s)
+        run: sleep 60
 
       - name: Get Droplet IP
         id: get_ip
         working-directory: terraform
         run: |
-          IP=$(terraform output -raw droplet_ip)
+          IP=$(terraform output -raw droplet_ip || echo "")
           echo "server_ip=$IP" >> $GITHUB_OUTPUT
           echo "IP capturado: $IP"
+
 
   deploy:
     name: Deploy
