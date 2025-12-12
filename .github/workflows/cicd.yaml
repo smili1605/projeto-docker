@@ -31,24 +31,26 @@ jobs:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
         run: terraform plan
 
-      - name: Wait for Terraform Cloud apply + fetch outputs
+      - name: Wait for Terraform Cloud Apply to finish and get IP
         id: get_ip
         working-directory: terraform
         run: |
-          # Esperar o apply do Terraform Cloud terminar
-          # Aqui apenas aguardamos o state ser atualizado
-          for i in {1..30}; do
+          echo "Aguardando Terraform Cloud terminar o apply..."
+
+          for i in {1..40}; do
             IP=$(terraform output -raw droplet_ip 2>/dev/null || true)
+
             if [ ! -z "$IP" ]; then
-              echo "IP encontrado: $IP"
               echo "server_ip=$IP" >> $GITHUB_OUTPUT
+              echo "IP encontrado: $IP"
               exit 0
             fi
-            echo "Aguardando o Terraform Cloud aplicar... ($i/30)"
+
+            echo "Ainda não disponível... ($i/40)"
             sleep 10
           done
-          
-          echo "Falha ao obter o IP do droplet."
+
+          echo "❌ Falha: Terraform Cloud não liberou o IP a tempo."
           exit 1
 
   deploy:
