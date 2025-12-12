@@ -27,11 +27,10 @@ jobs:
 
       - name: Run Tests
         run: |
-          # Ajuste para seus testes Python
           if [ -d "tests" ]; then
             pytest tests/
           else
-            echo "Nenhum teste encontrado, criando teste básico..."
+            echo "Nenhum teste encontrado"
             python -c "print('Teste básico passou')"
           fi
 
@@ -73,9 +72,6 @@ jobs:
         run: |
           echo "Conteúdo da pasta terraform:"
           ls -la ./terraform/
-          echo ""
-          echo "Conteúdo do backend.tf:"
-          cat ./terraform/backend.tf
 
       - name: Terraform Init
         working-directory: ./terraform
@@ -104,20 +100,11 @@ jobs:
         run: |
           IP=$(terraform output -raw droplet_ip 2>/dev/null || echo "")
           if [ -z "$IP" ]; then
-            echo "Atenção: Não foi possível obter o IP do Terraform Output."
-            echo "Tentando método alternativo..."
-            IP=$(terraform show -json | jq -r '.values.outputs.droplet_ip.value // empty' 2>/dev/null || echo "")
-          fi
-          
-          if [ -z "$IP" ]; then
-            echo "Erro: IP não encontrado após múltiplas tentativas"
-            echo "Mostrando estado do terraform:"
-            terraform show
+            echo "Erro: Não foi possível obter o IP"
             exit 1
           fi
-          
           echo "server_ip=$IP" >> "$GITHUB_OUTPUT"
-          echo "Droplet IP obtido: $IP"
+          echo "Droplet IP: $IP"
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
 
@@ -138,31 +125,13 @@ jobs:
       - name: Add Droplet to known_hosts
         run: |
           IP="${{ needs.provision-infra.outputs.droplet_ip }}"
-          echo "IP do droplet: $IP"
           mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
           ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Wait for Droplet to be ready
-        run: |
-          IP="${{ needs.provision-infra.outputs.droplet_ip }}"
-          echo "Aguardando droplet ficar acessível via SSH..."
-          for i in {1..30}; do
-            if timeout 5 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ubuntu@$IP "echo 'Droplet está pronto!'" 2>/dev/null; then
-              echo "Droplet acessível após $i tentativas"
-              break
-            else
-              echo "Tentativa $i/30 falhou, aguardando 10 segundos..."
-              sleep 10
-            fi
-          done
 
       - name: Upload Docker Files
         run: |
           IP="${{ needs.provision-infra.outputs.droplet_ip }}"
-          echo "Fazendo upload de arquivos para $IP"
-          scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+          scp -o StrictHostKeyChecking=no \
             docker-compose.yml \
             Dockerfile \
             requirements.txt \
@@ -172,60 +141,14 @@ jobs:
         run: |
           IP="${{ needs.provision-infra.outputs.droplet_ip }}"
           TAG="${{ needs.build.outputs.docker_tag }}"
-          echo "Fazendo deploy da tag $TAG no IP $IP"
-          
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@$IP "
-            set -e
-            echo 'Acessando droplet...'
+          ssh ubuntu@$IP "
             cd /home/ubuntu
-            
-            # Cria arquivo .env
-            echo 'Criando .env...'
-            cat > .env << 'EOF'
-DOCKER_IMAGE_TAG=$TAG
-DB_USER=${{ secrets.DB_USER }}
-DB_PASS=${{ secrets.DB_PASS }}
-DB_NAME=${{ secrets.DB_NAME }}
-EOF
-            
-            echo 'Conteúdo do .env:'
-            cat .env
-            
-            echo 'Fazendo login no DockerHub...'
-            docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' -p '${{ secrets.DOCKERHUB_TOKEN }}'
-            
-            echo 'Subindo container...'
+            echo 'DOCKER_IMAGE_TAG=$TAG' > .env
+            echo 'DB_USER=${{ secrets.DB_USER }}' >> .env
+            echo 'DB_PASS=${{ secrets.DB_PASS }}' >> .env
+            echo 'DB_NAME=${{ secrets.DB_NAME }}' >> .env
+            docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
             docker-compose up -d --build
-            
-            echo 'Verificando containers...'
-            docker ps
-            
-            echo 'Limpando containers e imagens antigas...'
             docker container prune -f
             docker image prune -f -a
           "
-
-  cleanup:
-    name: Cleanup on Failure
-    if: failure() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    needs: [provision-infra]
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.6.0"
-      
-      - name: Terraform Destroy
-        working-directory: ./terraform
-        run: |
-          echo "Executando destroy devido a falha no pipeline..."
-          terraform destroy -auto-approve
-        env:
-          TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN }}
-          TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
-        continue-on-error: true
