@@ -1,47 +1,79 @@
-name: CI/CD with Terraform (DigitalOcean + Terraform Cloud)
+name: CI/CD Full Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
-  provision-infra:
-    name: Provision Infra (Terraform)
+  build:
+    name: Build & Test
     runs-on: ubuntu-latest
-    outputs:
-      server_ip: ${{ steps.get_ip.outputs.server_ip }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          terraform_version: 1.6.0
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+  terraform:
+    name: IaC - Terraform Cloud
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Terraform Cloud Credentials
+        run: |
+          mkdir -p ~/.terraform.d
+          cat <<EOF > ~/.terraform.d/credentials.tfrc.json
+          {
+            "credentials": {
+              "app.terraform.io": {
+                "token": "${{ secrets.TF_API_TOKEN }}"
+              }
+            }
+          }
+          EOF
+
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3
+        with:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
       - name: Terraform Init
-        working-directory: terraform
         run: terraform init
 
-      - name: Terraform Plan (remote)
-        working-directory: terraform
-        env:
-          DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        run: terraform plan
+      - name: Terraform Plan
+        run: terraform plan -input=false
 
-      - name: Wait for Terraform Cloud Apply to finish and get IP
-        id: get_ip
-        working-directory: terraform
+      - name: Terraform Apply (via Terraform Cloud)
+        run: terraform apply -auto-approve
+
+      - name: Aguardar Terraform Cloud terminar o apply e liberar o IP
+        id: fetch-ip
+        shell: bash
         run: |
           echo "Aguardando Terraform Cloud terminar o apply..."
 
-          for i in {1..40}; do
-            IP=$(terraform output -raw droplet_ip 2>/dev/null || true)
+          TERRAFORM_BIN="${TERRAFORM_CLI_PATH}/terraform-bin"
 
-            if [ ! -z "$IP" ]; then
-              echo "server_ip=$IP" >> $GITHUB_OUTPUT
+          for i in {1..40}; do
+            IP=$($TERRAFORM_BIN output -raw droplet_ip 2>/dev/null || true)
+
+            if [[ ! -z "$IP" && "$IP" != *"╷"* ]]; then
+              echo "server_ip=$IP" >> "$GITHUB_OUTPUT"
               echo "IP encontrado: $IP"
               exit 0
             fi
@@ -53,30 +85,39 @@ jobs:
           echo "❌ Falha: Terraform Cloud não liberou o IP a tempo."
           exit 1
 
+
   deploy:
-    name: Deploy app to Droplet
+    name: Deploy da Aplicação
     runs-on: ubuntu-latest
-    needs: provision-infra
+    needs: terraform
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent and add key
-        uses: webfactory/ssh-agent@v0.8.1
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Instalar SSH Client
+        run: sudo apt-get update && sudo apt-get install -y openssh-client
 
-      - name: Add host to known_hosts
+      - name: Adicionar chave SSH
         run: |
-          IP=${{ needs.provision-infra.outputs.server_ip }}
           mkdir -p ~/.ssh
-          ssh-keyscan -H $IP >> ~/.ssh/known_hosts
+          echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
 
-      - name: Copy files and deploy
+      - name: Copiar arquivos para o servidor
         run: |
-          IP=${{ needs.provision-infra.outputs.server_ip }}
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" ./ \
+            root@${{ needs.terraform.outputs.server_ip }}:/root/app/
 
-          scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$IP:/home/ubuntu/docker-compose.yml
+      - name: Deploy com Docker
+        run: |
+          ssh -o StrictHostKeyChecking=no root@${{ needs.terraform.outputs.server_ip }} << 'EOF'
+            cd /root/app
+            docker stop app || true
+            docker rm app || true
+            docker build -t app .
+            docker run -d --name app -p 80:3000 app
+          EOF
 
-          ssh ubuntu@$IP "cd /home/ubuntu && docker compose up -d --build"
+      - name: URL Final
+        run: echo "🌎 Aplicação disponível em: http://${{ needs.terraform.outputs.server_ip }}"
