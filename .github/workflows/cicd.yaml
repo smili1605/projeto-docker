@@ -34,22 +34,30 @@ jobs:
         working-directory: terraform
         run: terraform plan
 
-      # Terraform Cloud aplica automaticamente — NÃO rodar apply localmente
+      # Terraform Cloud aplica automaticamente
       - name: Wait Terraform Cloud Apply (90s)
         run: sleep 90
 
-      - name: Get Droplet IP
+      # ⭐ SOLUÇÃO DEFINITIVA: pegar IP direto da API do Terraform Cloud
+      - name: Get Droplet IP from Terraform Cloud
         id: get_ip
-        working-directory: terraform
         run: |
-          RAW=$(terraform output droplet_ip | tr -d '\n')
-          IP=$(echo "$RAW" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
+          WORKSPACE_ID=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
+            https://app.terraform.io/api/v2/organizations/ProjetoDocker/workspaces/projeto-docker \
+            | jq -r '.data.id')
 
-          # ÚNICA linha que deve ir para GITHUB_OUTPUT
+          STATE_URL="https://app.terraform.io/api/v2/workspaces/$WORKSPACE_ID/current-state-version"
+
+          RESULT=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.TF_API_TOKEN }}" \
+            $STATE_URL)
+
+          IP=$(echo "$RESULT" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
+
           echo "server_ip=$IP" >> "$GITHUB_OUTPUT"
 
-          # Logs precisam ir para stderr
-          echo "IP capturado: $IP" >&2
+          echo "IP capturado da Terraform Cloud: $IP" >&2
 
   deploy:
     name: Deploy App
