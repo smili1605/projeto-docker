@@ -27,7 +27,7 @@ jobs:
           # Atualiza pip
           python -m pip install --upgrade pip
           
-          # Verifica se httpx está no requirements.txt, se não, adiciona
+          # Verifica se httpx está no requirements.txt
           if ! grep -q "httpx" requirements.txt; then
             echo "Adicionando httpx ao requirements.txt..."
             echo "httpx==0.25.1" >> requirements.txt
@@ -36,68 +36,27 @@ jobs:
           # Instala dependências
           pip install -r requirements.txt
           
-          # Verifica instalação das dependências críticas
-          echo "Verificando instalações..."
-          python -c "import fastapi, uvicorn, sqlalchemy, pytest, httpx; print('✅ Todas as dependências instaladas!')"
+          # Verifica instalações
+          echo "Verificando dependências..."
+          python -c "import fastapi, uvicorn, sqlalchemy, pytest, httpx; print('✅ Dependências instaladas!')"
 
       - name: Run Tests
         run: |
           echo "=== EXECUTANDO TESTES ==="
           
-          # Verifica se httpx está instalado (necessário para TestClient)
-          python -c "
-          try:
-              import httpx
-              print('✅ httpx instalado')
-          except ImportError:
-              print('❌ httpx não instalado, instalando...')
-              import subprocess
-              subprocess.run(['pip', 'install', 'httpx==0.25.1'])
-          "
+          # Configura ambiente de teste
+          export TEST_MODE=true
+          export DATABASE_URL="sqlite:///./test.db"
           
-          # Verifica estrutura do projeto
-          echo "Estrutura do projeto:"
-          find . -name "*.py" -type f | grep -E "(main|test|database)" | head -20
-          
-          if [ -f "tests/__init__.py" ] || [ -f "tests/test_main.py" ] || [ -n "$(find tests -name 'test_*.py' -type f 2>/dev/null)" ]; then
-            echo "Executando testes com pytest..."
-            
-            # Configura variáveis de ambiente para testes
-            export TEST_MODE=true
-            export DATABASE_URL="sqlite:///./test.db"
-            
-            # Executa testes com cobertura e relatório detalhado
-            pytest tests/ \
-              -v \
-              --tb=short \
-              --disable-warnings \
-              || echo "⚠️  Testes falharam, mas continuando o build..."
-            
-            echo "Status dos testes: $?"
+          if [ -f "tests/test_main.py" ]; then
+            echo "Executando testes..."
+            pytest tests/ -v --tb=short || echo "⚠️  Testes falharam, continuando build..."
           else
-            echo "Nenhum arquivo de teste encontrado na pasta tests/"
-            echo "Criando teste básico..."
+            echo "Teste básico..."
             python -c "
-            print('🧪 TESTE BÁSICO DE SANIDADE')
-            print('=' * 40)
-            try:
-                # Teste básico
-                assert 1 + 1 == 2, 'Matemática básica falhou!'
-                
-                # Testa importações básicas
-                import fastapi
-                import sqlalchemy
-                import pytest
-                
-                print('✅ FastAPI importado com sucesso')
-                print('✅ SQLAlchemy importado com sucesso')
-                print('✅ Pytest importado com sucesso')
-                print('✅ Teste básico passou!')
-                print('=' * 40)
-            except Exception as e:
-                print(f'❌ Erro: {e}')
-                print('=' * 40)
-                raise
+            print('🧪 TESTE BÁSICO')
+            assert 1 + 1 == 2
+            print('✅ Teste passou!')
             "
           fi
 
@@ -117,13 +76,13 @@ jobs:
         run: |
           echo "Construindo imagem Docker..."
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/python-app:${{ steps.generate_tag.outputs.sha }} .
-          echo "✅ Imagem construída com sucesso!"
+          echo "✅ Imagem construída!"
 
       - name: Push to Docker Hub
         run: |
           echo "Enviando imagem para Docker Hub..."
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/python-app:${{ steps.generate_tag.outputs.sha }}
-          echo "✅ Imagem enviada com sucesso!"
+          echo "✅ Imagem enviada!"
 
   provision-infra:
     name: Provision Infrastructure
@@ -168,7 +127,7 @@ jobs:
         run: |
           IP=$(terraform output -raw droplet_ip 2>/dev/null || echo "")
           if [ -z "$IP" ]; then
-            echo "Erro: Não foi possível obter o IP do Terraform Output."
+            echo "Erro: Não foi possível obter o IP"
             exit 1
           fi
           echo "server_ip=$IP" >> "$GITHUB_OUTPUT"

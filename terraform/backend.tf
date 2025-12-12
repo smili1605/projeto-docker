@@ -6,8 +6,6 @@ terraform {
       name = "projeto-docker"
     }
   }
-
-  # ADIÇÃO PROBLEMÁTICA: Versão incompatível
-  required_version = ">= 99.0.0"  # <-- Isso vai causar erro!
+  
+  required_version = ">= 1.5.0, < 2.0.0"
 }
-
