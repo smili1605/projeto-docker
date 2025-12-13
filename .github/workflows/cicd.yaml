@@ -8,7 +8,6 @@ env:
   IMAGE_NAME: python-app
 
 jobs:
-  # 1. BUILD - Constrói e envia imagem Docker
   build-docker:
     name: 🐳 Build Docker Image
     runs-on: ubuntu-latest
@@ -41,14 +40,10 @@ jobs:
           
           echo "🔨 Construindo: $IMAGE"
           docker build -t $IMAGE .
-          
-          echo "📤 Enviando para DockerHub..."
           docker push $IMAGE
-          
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
-          echo "✅ Imagem enviada com sucesso!"
+          echo "✅ Imagem enviada"
 
-  # 2. TERRAFORM - Provisiona infraestrutura
   terraform-infra:
     name: ☁️ Provisionar Infraestrutura
     runs-on: ubuntu-latest
@@ -62,13 +57,6 @@ jobs:
 
       - name: 🔍 Verificar Secrets
         run: |
-          echo "🔐 VERIFICAÇÃO DE SECRETS"
-          echo "========================"
-          echo "TF_TOKEN: ${{ secrets.TF_TOKEN != '' && '✅' || '❌' }}"
-          echo "DO_TOKEN: ${{ secrets.DO_TOKEN != '' && '✅' || '❌' }}"
-          echo "SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY != '' && '✅' || '❌' }}"
-          echo "========================"
-          
           if [ -z "${{ secrets.DO_TOKEN }}" ]; then
             echo "🚨 ERRO: DO_TOKEN não configurada!"
             exit 1
@@ -89,18 +77,13 @@ jobs:
       - name: 📋 Criar Plano Terraform
         working-directory: ./terraform
         run: |
-          echo "📝 Criando plano de execução..."
-          
-          # Remove arquivos de lock antigos
           rm -f .terraform.tfstate.lock.info 2>/dev/null || true
-          
           terraform plan \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
             -var="ssh_key_name=projeto-docker-$(date +%s)" \
             -input=false -no-color -out=tfplan
-          
-          echo "✅ Plano criado com sucesso!"
+          echo "✅ Plano criado"
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN || secrets.TF_API_TOKEN }}
 
@@ -108,15 +91,11 @@ jobs:
         id: apply
         working-directory: ./terraform
         run: |
-          echo "🚀 Aplicando configuração da infraestrutura..."
-          
-          # Tenta aplicar (pode falhar se for workspace VCS)
           terraform apply -auto-approve \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
             -input=false -no-color 2>&1 || echo "⚠️  Modo VCS detectado"
           
-          # Verifica se aplicou com sucesso
           if terraform output -raw droplet_ip >/dev/null 2>&1; then
             echo "apply_status=success" >> $GITHUB_OUTPUT
           else
@@ -130,33 +109,22 @@ jobs:
         id: get_ip
         working-directory: ./terraform
         run: |
-          echo "📍 Obtendo IP do Droplet..."
-          
-          # Aguarda alguns segundos para criação
           sleep 15
-          
-          # Tenta obter o IP várias vezes
           for i in {1..5}; do
             IP=$(terraform output -raw droplet_ip 2>/dev/null || echo "")
-            
             if [ -n "$IP" ] && [ "$IP" != "null" ] && [ "$IP" != "" ]; then
               echo "✅ IP encontrado: $IP"
               echo "droplet_ip=$IP" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            
             echo "⏳ Tentativa $i/5 - Aguardando criação do droplet..."
             sleep 10
           done
-          
           echo "⚠️  IP não disponível ainda"
-          echo "💡 Se estiver usando Terraform Cloud VCS:"
-          echo "🔗 Acesse: https://app.terraform.io/app/ProjetoDocker/projeto-docker"
           echo "droplet_ip=PENDING_APPROVAL" >> "$GITHUB_OUTPUT"
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN || secrets.TF_API_TOKEN }}
 
-  # 3. DEPLOY - Implanta aplicação no Droplet
   deploy:
     name: 🚀 Deploy no Droplet
     runs-on: ubuntu-latest
@@ -166,32 +134,19 @@ jobs:
       - name: 📥 Checkout código
         uses: actions/checkout@v4
 
-      - name: 🔍 Preparar Chave SSH
+      - name: 🔍 Preparar e Validar Chave SSH
         id: prepare_ssh
         run: |
-          echo "🔧 Preparando chave SSH..."
-          
-          # Cria arquivo com a chave privada
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/ssh_key
-          
-          # Remove caracteres problemáticos
-          sed -i 's/\\r//g' /tmp/ssh_key  # Remove \r do Windows
-          sed -i 's/\\n/\n/g' /tmp/ssh_key  # Converte \n para quebras reais
-          sed -i '/^$/d' /tmp/ssh_key  # Remove linhas vazias
-          
-          # Garante permissões corretas
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/ssh_key_original
+          tr -d '\r' < /tmp/ssh_key_original > /tmp/ssh_key_clean
+          echo "" >> /tmp/ssh_key_clean
+          cp /tmp/ssh_key_clean /tmp/ssh_key
           chmod 600 /tmp/ssh_key
           
-          # Verifica se a chave é válida
-          echo "🔐 Validando chave SSH..."
-          if ssh-keygen -l -f /tmp/ssh_key 2>/dev/null; then
-            echo "✅ Chave SSH válida!"
+          if ssh-keygen -l -f /tmp/ssh_key >/dev/null 2>&1; then
+            echo "✅ Chave SSH válida"
           else
-            echo "❌ Chave SSH inválida!"
-            echo "📋 Formato esperado:"
-            echo "-----BEGIN OPENSSH PRIVATE KEY-----"
-            echo "..."
-            echo "-----END OPENSSH PRIVATE KEY-----"
+            echo "❌ Chave inválida. Atualize o segredo SSH_PRIVATE_KEY"
             exit 1
           fi
 
@@ -206,26 +161,19 @@ jobs:
           IP="${{ needs.terraform-infra.outputs.droplet_ip }}"
           
           if [ "$IP" = "PENDING_APPROVAL" ] || [ -z "$IP" ]; then
-            echo "⏳ Aguardando criação do droplet..."
-            echo "💡 Acesse o Terraform Cloud para aprovar:"
-            echo "🔗 https://app.terraform.io/app/ProjetoDocker/projeto-docker"
+            echo "⏳ Aguardando criação do droplet"
             echo "skip_deploy=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          echo "🔗 Testando conexão com $IP..."
-          
-          # Adiciona ao known_hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts 2>/dev/null
           
-          # Testa conexão SSH
-          if timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no ubuntu@$IP "echo '✅ Conexão SSH OK'"; then
-            echo "✅ Droplet está acessível"
+          if timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no ubuntu@$IP "echo 'OK'" 2>/dev/null; then
+            echo "✅ Droplet acessível"
             echo "skip_deploy=false" >> $GITHUB_OUTPUT
           else
             echo "⚠️  Droplet não está respondendo"
-            echo "💡 Aguarde mais alguns minutos e tente novamente"
             echo "skip_deploy=true" >> $GITHUB_OUTPUT
           fi
 
@@ -233,126 +181,55 @@ jobs:
         if: steps.check_connectivity.outputs.skip_deploy == 'false'
         run: |
           IP="${{ needs.terraform-infra.outputs.droplet_ip }}"
-          
-          echo "📤 Enviando arquivos para $IP..."
-          
-          # Envia arquivos necessários
           scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
             docker-compose.yml \
             Dockerfile \
             requirements.txt \
             ubuntu@$IP:/home/ubuntu/
-          
-          echo "✅ Arquivos enviados com sucesso!"
+          echo "✅ Arquivos enviados"
 
       - name: 🚀 Executar Deploy
         if: steps.check_connectivity.outputs.skip_deploy == 'false'
         run: |
           IP="${{ needs.terraform-infra.outputs.droplet_ip }}"
           TAG="${{ needs.build-docker.outputs.docker_tag }}"
-          IMAGE="${{ needs.build-docker.outputs.image_name }}"
           
-          echo "🚀 INICIANDO DEPLOY"
-          echo "=================="
-          echo "📍 Droplet: $IP"
-          echo "📦 Imagem: $IMAGE"
-          echo "=================="
-          
-          # Executa comandos de deploy no droplet
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@$IP "
-            set -e
-            
-            echo '📁 Acessando diretório...'
             cd /home/ubuntu
-            pwd
-            ls -la
-            
-            echo '📝 Criando arquivo .env...'
-            cat > .env << EOF
+            cat > .env << 'EOF'
             DOCKER_IMAGE_TAG=$TAG
             DB_USER=${{ secrets.DB_USER || 'postgres' }}
             DB_PASS=${{ secrets.DB_PASS || 'password' }}
             DB_NAME=${{ secrets.DB_NAME || 'appdb' }}
             EOF
             
-            echo '📄 Conteúdo do .env:'
-            cat .env
-            
-            echo '🔐 Fazendo login no DockerHub...'
             if [ -n '${{ secrets.DOCKERHUB_USERNAME }}' ] && [ -n '${{ secrets.DOCKERHUB_TOKEN }}' ]; then
               echo '${{ secrets.DOCKERHUB_TOKEN }}' | docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' --password-stdin
-            else
-              echo '⚠️  Credenciais DockerHub não configuradas'
             fi
             
-            echo '🛑 Parando containers existentes...'
             docker-compose down 2>/dev/null || true
-            
-            echo '🚀 Iniciando nova versão...'
             docker-compose up -d --build
-            
-            echo '✅ DEPLOY COMPLETO!'
-            echo ''
-            echo '📊 STATUS DOS CONTAINERS:'
-            docker ps
-            echo ''
-            echo '🌐 APLICAÇÃO DISPONÍVEL EM:'
-            echo "http://$IP:8080"
+            echo '✅ Deploy completo em http://$IP:8080'
           "
-          
-          echo ""
-          echo "🎉 DEPLOY FINALIZADO COM SUCESSO!"
-          echo "🌐 Acesse sua aplicação: http://$IP:8080"
+          echo "🎉 Deploy finalizado: http://$IP:8080"
 
       - name: 📊 Resumo do Deploy
         run: |
+          IP="${{ needs.terraform-infra.outputs.droplet_ip }}"
           echo "========================================"
           echo "📋 RESUMO DO DEPLOYMENT"
           echo "========================================"
-          echo "🐳 Imagem Docker: ${{ needs.build-docker.outputs.image_name }}"
-          echo "🌐 Droplet IP: ${{ needs.terraform-infra.outputs.droplet_ip }}"
-          echo "🔄 Status: ${{ steps.check_connectivity.outputs.skip_deploy == 'false' && '✅ DEPLOY EXECUTADO' || '⏳ AGUARDANDO' }}"
+          echo "🐳 Imagem: ${{ needs.build-docker.outputs.image_name }}"
+          echo "🌐 Droplet IP: $IP"
           
           if [ "${{ steps.check_connectivity.outputs.skip_deploy }}" = "true" ]; then
-            echo ""
-            echo "💡 PRÓXIMOS PASSOS:"
-            echo "1. Acesse o Terraform Cloud"
-            echo "2. Aprove o plano de execução"
-            echo "3. Aguarde a criação do droplet"
-            echo "4. Execute este workflow novamente"
-            echo ""
-            echo "🔗 Links:"
-            echo "• Terraform Cloud: https://app.terraform.io/app/ProjetoDocker/projeto-docker"
-            echo "• DockerHub: https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/python-app"
+            echo "⏳ AGUARDANDO CRIAÇÃO DO DROPLET"
+            echo "1. Acesse: https://app.terraform.io/app/ProjetoDocker/projeto-docker"
+            echo "2. Aprove o plano"
+            echo "3. Execute este workflow novamente"
           else
-            echo ""
-            echo "✅ TUDO PRONTO!"
-            echo "🌐 URL da aplicação: http://${{ needs.terraform-infra.outputs.droplet_ip }}:8080"
-            echo "🔧 Comandos úteis:"
-            echo "  ssh ubuntu@${{ needs.terraform-infra.outputs.droplet_ip }}"
-            echo "  docker logs python-app"
+            echo "✅ DEPLOY EXECUTADO"
+            echo "🌐 Aplicação: http://$IP:8080"
+            echo "🔧 Verifique: ssh ubuntu@$IP 'docker logs python-app'"
           fi
           echo "========================================"
-
-  # 4. CLEANUP - Limpeza opcional
-  cleanup:
-    name: 🧹 Limpeza (Opcional)
-    runs-on: ubuntu-latest
-    if: always() && github.ref == 'refs/heads/main'
-    needs: [deploy]
-    
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-      
-      - name: 📝 Log de Execução
-        run: |
-          echo "🧹 ETAPA DE LIMPEZA"
-          echo "=================="
-          echo "Esta etapa é opcional e pode ser usada para:"
-          echo "• Limpar recursos temporários"
-          echo "• Enviar notificações"
-          echo "• Registrar métricas"
-          echo ""
-          echo "Status do deploy: ${{ needs.deploy.result }}"
-          echo "=================="
