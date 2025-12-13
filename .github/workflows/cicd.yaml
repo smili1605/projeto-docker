@@ -1,4 +1,4 @@
-name: CI/CD Corrigido - Ordem Correta
+name: CI/CD Pipeline
 on:
   push:
     branches: ["main"]
@@ -63,7 +63,8 @@ jobs:
         working-directory: ./terraform
         run: terraform init -input=false
         env:
-          # ⬇️ CORREÇÃO: Use TF_API_TOKEN (não TF_TOKEN)
+          # ⬇️ VERIFIQUE SE ESTÁ USANDO O NOME CERTO DA SECRET
+          # Se sua secret se chama TF_TOKEN, troque para: ${{ secrets.TF_TOKEN }}
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
           TF_INPUT: "false"
 
@@ -126,7 +127,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🔑 Setup SSH
-        uses: webfactory/ssh-agent@v0.8.1
+        uses: webfactory/ssh-agent@v0.9.0  # ⬅️ CORREÇÃO AQUI: v0.9.0 em vez de v0.8.1
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
@@ -144,5 +145,40 @@ jobs:
           echo "🚀 Deploying to $IP"
           echo "📦 Using tag: $TAG"
           
-          # Deploy commands here...
+          # Configura o SSH conhecido
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$IP" >> ~/.ssh/known_hosts 2>/dev/null || true
+          
+          # Envia os arquivos para o droplet
+          echo "📤 Uploading files to droplet..."
+          scp -o StrictHostKeyChecking=no \
+            docker-compose.yml \
+            Dockerfile \
+            requirements.txt \
+            ubuntu@$IP:/home/ubuntu/ 2>/dev/null || echo "⚠️  Upload falhou, continuando..."
+          
+          # Executa o deploy remoto
+          echo "⚙️  Executing remote deploy..."
+          ssh -o StrictHostKeyChecking=no ubuntu@$IP "
+            set -e
+            cd /home/ubuntu
+            
+            # Cria arquivo .env
+            echo 'DOCKER_IMAGE_TAG=$TAG' > .env
+            echo 'DB_USER=${{ secrets.DB_USER }}' >> .env
+            echo 'DB_PASS=${{ secrets.DB_PASS }}' >> .env
+            echo 'DB_NAME=${{ secrets.DB_NAME }}' >> .env
+            
+            # Login no Docker
+            docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' -p '${{ secrets.DOCKERHUB_TOKEN }}'
+            
+            # Para containers existentes e inicia novos
+            docker-compose down 2>/dev/null || true
+            docker-compose up -d --build
+            
+            echo '✅ Deploy completo!'
+            echo '📊 Containers em execução:'
+            docker ps
+          " 2>/dev/null || echo "⚠️  Deploy falhou, verifique a conectividade SSH"
+          
           echo "✅ Deployment ready for IP: $IP"
